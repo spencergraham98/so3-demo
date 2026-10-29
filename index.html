@@ -25,6 +25,152 @@
       precision highp float;
       attribute vec3 aPosition;
       attribute vec3 aColor;
+      uniform mat3 uRotation;
+      uniform float uAspect;
+      varying vec3 vColor;
+      void main() {
+        vColor = aColor;
+        vec3 rotated = uRotation * aPosition;
+        gl_Position = vec4(rotated.x * uAspect, rotated.y, rotated.z * 0.5, 1.0);
+        gl_PointSize = 1.0;
+      }
+    `;
+
+    const fsSource = `
+      precision highp float;
+      varying vec3 vColor;
+      void main() {
+        gl_FragColor = vec4(vColor, 1.0);
+      }
+    `;
+
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      return shader;
+    }
+
+    const program = gl.createProgram();
+    gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
+    gl.attachShader(program, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
+    gl.linkProgram(program);
+    gl.useProgram(program);
+
+    const TOTAL_POINTS = 1000000;
+    const CHUNK_SIZE = 100000;
+    let loadedPoints = 0;
+
+    const positions = new Float32Array(TOTAL_POINTS * 3);
+    const colors = new Float32Array(TOTAL_POINTS * 3);
+
+    const posBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions.byteLength, gl.DYNAMIC_DRAW);
+
+    const colBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, colors.byteLength, gl.DYNAMIC_DRAW);
+
+    function generateChunk() {
+      if (loadedPoints >= TOTAL_POINTS) return;
+
+      const end = Math.min(loadedPoints + CHUNK_SIZE, TOTAL_POINTS);
+      for (let i = loadedPoints; i < end; i++) {
+        const u = Math.random();
+        const v = Math.random();
+        const theta = u * 2.0 * Math.PI;
+        const phi = Math.acos(2.0 * v - 1.0);
+        const r = Math.cbrt(Math.random());
+
+        const x = r * Math.sin(phi) * Math.cos(theta);
+        const y = r * Math.sin(phi) * Math.sin(theta);
+        const z = r * Math.cos(phi);
+
+        positions[i * 3] = x * 0.75;
+        positions[i * 3 + 1] = y * 0.75;
+        positions[i * 3 + 2] = z * 0.75;
+
+        colors[i * 3] = x * 0.5 + 0.5;
+        colors[i * 3 + 1] = y * 0.5 + 0.5;
+        colors[i * 3 + 2] = z * 0.5 + 0.5;
+      }
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, loadedPoints * 3 * 4, positions.subarray(loadedPoints * 3, end * 3));
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, colBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, loadedPoints * 3 * 4, colors.subarray(loadedPoints * 3, end * 3));
+
+      loadedPoints = end;
+
+      if (loadedPoints < TOTAL_POINTS) {
+        setTimeout(generateChunk, 0);
+      }
+    }
+
+    generateChunk();
+
+    const aPosLoc = gl.getAttribLocation(program, 'aPosition');
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+    gl.enableVertexAttribArray(aPosLoc);
+    gl.vertexAttribPointer(aPosLoc, 3, gl.FLOAT, false, 0, 0);
+
+    const aColLoc = gl.getAttribLocation(program, 'aColor');
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuffer);
+    gl.enableVertexAttribArray(aColLoc);
+    gl.vertexAttribPointer(aColLoc, 3, gl.FLOAT, false, 0, 0);
+
+    const uRotLoc = gl.getUniformLocation(program, 'uRotation');
+    const uAspectLoc = gl.getUniformLocation(program, 'uAspect');
+
+    let rotMatrix = [
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1
+    ];
+
+    let isDragging = false, lastX = 0, lastY = 0;
+
+    function multiply3x3(a, b) {
+      const out = new Array(9);
+      out[0] = a[0]*b[0] + a[1]*b[3] + a[2]*b[6];
+      out[1] = a[0]*b[1] + a[1]*b[4] + a[2]*b[7];
+      out[2] = a[0]*b[2] + a[1]*b[5] + a[2]*b[8];
+
+      out[3] = a[3]*b[0] + a[4]*b[3] + a[5]*b[6];
+      out[4] = a[3]*b[1] + a[4]*b[4] + a[5]*b[7];
+      out[5] = a[3]*b[2] + a[4]*b[5] + a[5]*b[8];
+
+      out[6] = a[6]*b[0] + a[7]*b[3] + a[8]*b[6];
+      out[7] = a[6]*b[1] + a[7]*b
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>SO(3) 1,000,000 Vector Point Cloud</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { width: 100vw; height: 100vh; display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const gl = canvas.getContext('webgl', { antialias: false, alpha: false }) || canvas.getContext('experimental-webgl');
+
+    if (!gl) {
+      alert('WebGL unavailable.');
+    }
+
+    const vsSource = `
+      precision highp float;
+      attribute vec3 aPosition;
+      attribute vec3 aColor;
       uniform mat4 uMatrix;
       varying vec3 vColor;
       void main() {
